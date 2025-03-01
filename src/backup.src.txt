@@ -1,0 +1,351 @@
+use core::ptr::copy_nonoverlapping;
+use device_query::{DeviceQuery, DeviceState, Keycode};
+use eframe::egui;
+use eframe::egui::pos2;
+use egui::{Color32, Pos2, Rect, Stroke, Vec2};
+use screenshots::Screen;
+use std::os::windows::ffi::OsStrExt;
+use std::thread;
+use std::time::Duration;
+use windows::Win32::Foundation::{BOOL, GetLastError, HANDLE, HWND};
+use windows::Win32::System::DataExchange::{
+    CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+};
+use windows::Win32::System::Memory::{
+    GMEM_MOVEABLE, GMEM_ZEROINIT, GlobalAlloc, GlobalFree, GlobalLock, GlobalUnlock,
+};
+use windows::Win32::System::Ole::CF_HDROP;
+use windows::Win32::UI::Shell::DROPFILES;
+
+const WINDOW_TRANSPARENCY: u8 = 180;
+fn main() {
+    println!("Starting Snip & Sketch (Alt) - press Ctrl+Shift+S to capture");
+
+    let device_state = DeviceState::new();
+
+    loop {
+        let keys: Vec<Keycode> = device_state.get_keys();
+
+        if keys.contains(&Keycode::LShift)
+            && keys.contains(&Keycode::LControl)
+            && keys.contains(&Keycode::S)
+        {
+            println!("Detected Ctrl+Shift+S, taking screenshot");
+            take_screenshot();
+
+            thread::sleep(Duration::from_millis(500));
+        }
+
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn take_screenshot() {
+    // Take a screenshot of the entire screen
+    let screens = Screen::all().unwrap();
+    let image = screens.get(1).unwrap().capture().unwrap();
+    let buffer = image.buffer();
+    let width = image.width();
+    let height = image.height();
+
+    // Show selection overlay
+    run_selection_overlay(buffer.to_vec(), width, height);
+    // if let Some(screen) = screens.first() {}
+}
+fn run_selection_overlay(screenshot_data: Vec<u8>, width: u32, height: u32) {
+    // Setup eframe options
+    let options = eframe::NativeOptions {
+        transparent: true,
+        decorated: false,
+        initial_window_size: Some(egui::vec2(width as f32, height as f32)),
+        centered: true,
+        always_on_top: true,
+        app_id: Some(String::new()),
+        ..Default::default()
+    };
+
+    let screenshot_data_clone = screenshot_data.clone();
+    let width_clone = width;
+    let height_clone = height;
+
+    eframe::run_native(
+        "Snip Overlay",
+        options,
+        Box::new(move |cc| {
+            cc.egui_ctx.set_visuals(egui::Visuals {
+                window_fill: Color32::TRANSPARENT,
+                panel_fill: Color32::TRANSPARENT,
+                window_stroke: Stroke::NONE,
+                ..Default::default()
+            });
+
+            Box::new(SnipOverlay {
+                screenshot_data: screenshot_data_clone,
+                width: width_clone,
+                height: height_clone,
+                start_pos: None,
+                current_pos: None,
+                selection_complete: false,
+                selected_rect: None,
+            })
+        }),
+    )
+    .unwrap();
+}
+
+impl eframe::App for SnipOverlay {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        [0.0, 0.0, 0.0, 0.0]
+    }
+
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            println!("ESC pressed, canceling screenshot");
+            frame.close();
+            return;
+        }
+
+        frame.set_centered();
+        frame.set_always_on_top(false);
+        ctx.set_visuals(egui::Visuals {
+            window_fill: Color32::TRANSPARENT,
+            panel_fill: Color32::TRANSPARENT,
+            window_stroke: Stroke::NONE,
+            ..Default::default()
+        });
+
+        // Handle selection completion
+        if self.selection_complete && self.selected_rect.is_some() {
+            let rect = self.selected_rect.unwrap();
+            println!("Selection completed: {:?}, copying to clipboard", rect);
+            copy_selection_to_clipboard(&self.screenshot_data, self.width, self.height, rect);
+            frame.close();
+            return;
+        }
+
+        // Use a transparent central panel
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none())
+            .show(ctx, |ui| {
+                let screen_rect = egui::Rect::from_min_size(
+                    Pos2::ZERO,
+                    egui::vec2(self.width as f32, self.height as f32),
+                );
+
+                let response = ui.allocate_rect(screen_rect, egui::Sense::drag());
+
+                if response.drag_started() {
+                    println!("Selection started");
+                    self.start_pos = response.hover_pos();
+                }
+
+                if response.dragged() {
+                    self.current_pos = response.hover_pos();
+                }
+
+                if response.drag_released()
+                    && self.start_pos.is_some()
+                    && self.current_pos.is_some()
+                {
+                    let start = self.start_pos.unwrap();
+                    let end = self.current_pos.unwrap();
+                    let rect = Rect::from_two_pos(start, end);
+
+                    println!("Selection released: {:?}", rect);
+                    self.selected_rect = Some(rect);
+                    self.selection_complete = true;
+                }
+
+                // Draw the actual "punch-through" effect
+                if let (Some(start), Some(current)) = (self.start_pos, self.current_pos) {
+                    let selection_rect = Rect::from_two_pos(start, current);
+
+                    let top_rect = Rect::from_min_max(
+                        screen_rect.min,
+                        pos2(screen_rect.max.x, selection_rect.min.y),
+                    );
+
+                    let bottom_rect = Rect::from_min_max(
+                        pos2(screen_rect.min.x, selection_rect.max.y),
+                        screen_rect.max,
+                    );
+
+                    let left_rect = Rect::from_min_max(
+                        pos2(screen_rect.min.x, selection_rect.min.y),
+                        pos2(selection_rect.min.x, selection_rect.max.y),
+                    );
+
+                    let right_rect = Rect::from_min_max(
+                        pos2(selection_rect.max.x, selection_rect.min.y),
+                        pos2(screen_rect.max.x, selection_rect.max.y),
+                    );
+
+                    // Draw the four overlay rectangles with semi-transparency
+                    let overlay_color =
+                        Color32::from_rgba_unmultiplied(0, 0, 0, WINDOW_TRANSPARENCY);
+                    ui.painter().rect_filled(top_rect, 0.0, overlay_color);
+                    ui.painter().rect_filled(bottom_rect, 0.0, overlay_color);
+                    ui.painter().rect_filled(left_rect, 0.0, overlay_color);
+                    ui.painter().rect_filled(right_rect, 0.0, overlay_color);
+
+                    ui.painter().rect_stroke(
+                        selection_rect,
+                        0.0,
+                        Stroke::new(2.0, Color32::from_rgb(255, 105, WINDOW_TRANSPARENCY)),
+                    );
+
+                    let dimensions = format!(
+                        "{}x{}",
+                        selection_rect.width() as i32,
+                        selection_rect.height() as i32
+                    );
+                    let text_pos = selection_rect.min - Vec2::new(0.0, 20.0);
+
+                    ui.painter().text(
+                        text_pos,
+                        egui::Align2::LEFT_BOTTOM,
+                        dimensions,
+                        egui::FontId::proportional(14.0),
+                        Color32::WHITE,
+                    );
+                } else {
+                    ui.painter().rect_filled(
+                        screen_rect,
+                        0.0,
+                        Color32::from_rgba_unmultiplied(0, 0, 0, WINDOW_TRANSPARENCY),
+                    );
+                }
+            });
+
+        // Keep UI responsive
+        ctx.request_repaint();
+    }
+}
+struct SnipOverlay {
+    screenshot_data: Vec<u8>,
+    width: u32,
+    height: u32,
+    start_pos: Option<Pos2>,
+    current_pos: Option<Pos2>,
+    selection_complete: bool,
+    selected_rect: Option<Rect>,
+}
+// After your eframe app is running and you have access to the Context
+
+fn copy_selection_to_clipboard(
+    screenshot_data: &[u8],
+    screen_width: u32,
+    screen_height: u32,
+    rect: Rect,
+) {
+    let x = rect.min.x.max(0.0) as u32;
+    let y = rect.min.y.max(0.0) as u32;
+    let width = rect.width() as u32;
+    let height = rect.height() as u32;
+    let width = width.min(screen_width - x);
+    let height = height.min(screen_height - y);
+
+    let temp_dir = std::env::temp_dir();
+    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+
+    if width == 0 || height == 0 {
+        return;
+    }
+
+    let img = match image::load_from_memory(screenshot_data) {
+        Ok(img) => img,
+        Err(_) => return,
+    };
+
+    let cropped = img.crop_imm(x, y, width, height);
+    let temp_path = temp_dir.join(format!("screenshot_{}.png", timestamp));
+
+    match cropped.save(&temp_path) {
+        Ok(_) => {}
+        Err(_) => return,
+    };
+
+    let abs_path = temp_path;
+
+    if !abs_path.exists() {
+        println!(
+            "Warning: File was not found at path: {}",
+            abs_path.display()
+        );
+    }
+
+    unsafe {
+        let dropfiles_size = size_of::<DROPFILES>();
+
+        let mut wide_path: Vec<u16> = abs_path.as_os_str().encode_wide().collect();
+        wide_path.push(0);
+
+        let path_size = wide_path.len() * size_of::<u16>();
+        let total_size = dropfiles_size + path_size + size_of::<u16>();
+
+        if !OpenClipboard(HWND(0)).as_bool() {
+            let error = GetLastError();
+            println!("Failed to open clipboard. Error code: {}", error.0);
+            return;
+        }
+
+        if !EmptyClipboard().as_bool() {
+            let error = GetLastError();
+            println!("Failed to empty clipboard. Error code: {}", error.0);
+            CloseClipboard();
+            return;
+        }
+
+        let h_glob = match GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, total_size) {
+            Ok(handle) => handle,
+            Err(e) => {
+                println!("Failed to allocate global memory: {:?}", e);
+                CloseClipboard();
+                return;
+            }
+        };
+
+        let p_glob = GlobalLock(h_glob);
+
+        if !p_glob.is_null() {
+            let p_drop = p_glob as *mut DROPFILES;
+            (*p_drop).pFiles = dropfiles_size as u32;
+            (*p_drop).pt.x = 0;
+            (*p_drop).pt.y = 0;
+            (*p_drop).fNC = BOOL(0);
+            (*p_drop).fWide = BOOL(1);
+
+            let p_path = (p_glob as usize + dropfiles_size) as *mut u16;
+            copy_nonoverlapping(wide_path.as_ptr(), p_path, wide_path.len());
+
+            *p_path.add(wide_path.len() - 1) = 0;
+
+            GlobalUnlock(h_glob);
+
+            let h_drop = SetClipboardData(CF_HDROP.0 as u32, HANDLE(h_glob.0 as isize));
+
+            if h_drop.unwrap().is_invalid() {
+                let error = GetLastError();
+                println!("Failed to set clipboard data. Error code: {}", error.0);
+                GlobalFree(h_glob).ok();
+                CloseClipboard();
+                return;
+            }
+        } else {
+            let error = GetLastError();
+            println!("Failed to lock global memory. Error code: {}", error.0);
+            GlobalFree(h_glob).ok();
+            CloseClipboard();
+            return;
+        }
+
+        if !CloseClipboard().as_bool() {
+            let error = GetLastError();
+            println!("Failed to close clipboard. Error code: {}", error.0);
+        }
+    }
+    println!(
+        "Image saved and file reference copied to clipboard: {}",
+        abs_path.display()
+    );
+}
