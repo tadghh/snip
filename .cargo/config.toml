@@ -1,12 +1,18 @@
-# [unstable]
-# build-std         =["alloc", "core", "panic_abort", "proc_macro", "std"]
-# build-std-features=["panic_immediate_abort"]
+[unstable]
+build-std         =["alloc", "core", "panic_abort", "proc_macro", "std"]
+build-std-features=["panic_immediate_abort"]
 
-# [build]
-# rustflags=["--cfg=has_std", "-C", "-C", "-C", "code-model=tiny", "panic=abort", "target-cpu=native"]
+[build]
+rustflags = [
+  "--cfg=has_std",
+  "-C", "code-model=tiny",
+  "-C", "panic=abort",
+  "-C", "target-cpu=native",
+  "-C", "passes=strip-debug-info"
+]
 
-# [target.x86_64-pc-windows-msvc]
-# rustflags=["-C", "link-arg=/LIMIT:10240"]
+[target.x86_64-pc-windows-msvc]
+rustflags=["-C", "link-arg=/LIMIT:10240"]
 
-# [target.'cfg(all(windows, target_env = "msvc"))']
-# rustflags=["-C", "target-feature=+crt-static"]
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags=["-C", "target-feature=+crt-static"]
