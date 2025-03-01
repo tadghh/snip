@@ -14,6 +14,7 @@ fn main() -> Result<(), eframe::Error> {
     take_screenshot()
 }
 
+// This could be cleaned up
 fn take_screenshot() -> Result<(), eframe::Error> {
     let screens = Screen::all().unwrap();
     println!("Detected {} screens", screens.len());
@@ -80,24 +81,9 @@ fn take_screenshot() -> Result<(), eframe::Error> {
             (width * height * 4) as usize
         );
 
-        let image = if buffer.len() > 8 && buffer.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
-            match image::load_from_memory_with_format(&buffer, image::ImageFormat::Png) {
-                Ok(img) => img.to_rgba8(),
-                Err(_) => continue, // Skip this screen if we can't decode it
-            }
-        // }
-        // else if buffer.len() > 3 && buffer.starts_with(&[0xFF, 0xD8, 0xFF]) {
-        //     // JPEG format
-        //     match image::load_from_memory_with_format(&buffer, image::ImageFormat::Jpeg) {
-        //         Ok(img) => img.to_rgba8(),
-        //         Err(_) => continue, // Skip this screen if we can't decode it
-        //     }
-        } else {
-            // Generic format detection
-            match image::load_from_memory(&buffer) {
-                Ok(img) => img.to_rgba8(),
-                Err(_) => continue, // Skip this screen if we can't decode it
-            }
+        let image = match image::load_from_memory(&buffer) {
+            Ok(img) => img.to_rgba8(),
+            Err(_) => continue,
         };
 
         let image_data = image.into_vec();

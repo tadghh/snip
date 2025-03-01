@@ -4,6 +4,7 @@ use egui::{Color32, Pos2, Rect, Stroke, Vec2};
 
 use crate::util::copy_selection_to_clipboard;
 
+static mut SNIPPING: bool = false;
 const WINDOW_TRANSPARENCY: u8 = 180;
 const ROUNDING: f32 = 0.5;
 
@@ -48,11 +49,14 @@ impl eframe::App for SnipOverlay {
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
-        if self.selection_complete && self.selected_rect.is_some() {
-            let rect = self.selected_rect.unwrap();
-            println!("Selection completed: {:?}, copying to clipboard", rect);
-            copy_selection_to_clipboard(&self.screenshot_data, self.width, self.height, rect);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        unsafe {
+            if self.selection_complete && self.selected_rect.is_some() && !SNIPPING {
+                SNIPPING = true;
+                let rect = self.selected_rect.unwrap();
+                println!("Selection completed: {:?}, copying to clipboard", rect);
+                copy_selection_to_clipboard(&self.screenshot_data, self.width, self.height, rect);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
         }
 
         egui::CentralPanel::default()
