@@ -22,14 +22,14 @@ pub struct SnipOverlay {
 impl SnipOverlay {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
-        screenshot_data: &[u8],
+        screenshot_data: Vec<u8>,
         width: u32,
         height: u32,
     ) -> Self {
         egui::ViewportCommand::center_on_screen(&cc.egui_ctx);
         cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         Self {
-            screenshot_data: screenshot_data.to_vec(),
+            screenshot_data,
             width,
             height,
             start_pos: None,
@@ -46,19 +46,6 @@ impl eframe::App for SnipOverlay {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        }
-        unsafe {
-            if self.selection_complete && self.selected_rect.is_some() && !SNIPPING {
-                SNIPPING = true;
-                let rect = self.selected_rect.unwrap();
-                println!("Selection completed: {:?}, copying to clipboard", rect);
-                copy_selection_to_clipboard(&self.screenshot_data, self.width, self.height, rect);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-        }
-
         egui::CentralPanel::default()
             .frame(egui::Frame::none())
             .show(ctx, |ui| {
@@ -149,7 +136,19 @@ impl eframe::App for SnipOverlay {
                     );
                 }
             });
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
 
+        unsafe {
+            if self.selection_complete && self.selected_rect.is_some() && !SNIPPING {
+                SNIPPING = true;
+                let rect = self.selected_rect.unwrap();
+                println!("Selection completed: {:?}, copying to clipboard", rect);
+                copy_selection_to_clipboard(&self.screenshot_data, self.width, self.height, rect);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
         // Keep UI responsive
         ctx.request_repaint();
     }
