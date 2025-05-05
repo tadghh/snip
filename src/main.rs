@@ -103,13 +103,14 @@ fn take_screenshot() -> Result<(), eframe::Error> {
         }
     }
 
-    let height_adjustment = total_height - min_height;
-
+    let width_offset = min_x.abs() as u32;
+    let height_offset = min_y.abs() as u32;
     run_selection_overlay(
         combined_buffer,
         total_width,
         total_height,
-        height_adjustment,
+        width_offset,
+        height_offset,
     )
 }
 
@@ -117,6 +118,7 @@ fn run_selection_overlay(
     screenshot_data: Vec<u8>,
     width: u32,
     height: u32,
+    width_offset: u32,
     height_offset: u32,
 ) -> Result<(), eframe::Error> {
     let native_options = eframe::NativeOptions {
@@ -125,8 +127,11 @@ fn run_selection_overlay(
             .with_transparent(true)
             .with_decorations(false)
             .with_active(true)
-            // TODO may need negative x offset
-            .with_position(pos2(0.0, height_offset as f32 * -1.0))
+            .with_window_level(egui::WindowLevel::AlwaysOnTop)
+            .with_position(pos2(
+                width_offset as f32 * -1.0,
+                height_offset as f32 * -1.0,
+            ))
             .with_taskbar(false),
         run_and_return: true,
         persist_window: false,
