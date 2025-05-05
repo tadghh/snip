@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+use crate::egui::WindowLevel::AlwaysOnTop;
 use eframe::egui::{self, pos2};
-
 use overlay::SnipOverlay;
 use screenshots::Screen;
 
@@ -8,8 +8,6 @@ mod overlay;
 mod util;
 
 fn main() -> Result<(), eframe::Error> {
-    println!("Starting Snip & Sketch (Alt) - press Ctrl+Shift+S to capture");
-
     take_screenshot()
 }
 
@@ -20,39 +18,29 @@ fn take_screenshot() -> Result<(), eframe::Error> {
     // Fast path for single screen
     if screens.len() == 1 {
         let image = screens[0].capture().unwrap();
-        return run_selection_overlay(image.buffer().to_vec(), image.width(), image.height(), 0);
+        return run_selection_overlay(image.buffer().to_vec(), image.width(), image.height(), 0, 0);
     }
 
     // Calculate bounding box and track min height for all screens
-    let (min_x, min_y, max_x, max_y, min_height) = screens.iter().fold(
-        (i32::MAX, i32::MAX, i32::MIN, i32::MIN, u32::MAX),
-        |(min_x, min_y, max_x, max_y, min_height), screen| {
+    let (min_x, min_y, max_x, max_y) = screens.iter().fold(
+        (i32::MAX, i32::MAX, i32::MIN, i32::MIN),
+        |(min_x, min_y, max_x, max_y), screen| {
             let x = screen.display_info.x;
             let y = screen.display_info.y;
             let width = screen.display_info.width as i32;
             let height = screen.display_info.height;
-
-            println!(
-                "Screen at position ({}, {}) with dimensions: {}x{}",
-                x, y, width, height
-            );
 
             (
                 min_x.min(x),
                 min_y.min(y),
                 max_x.max(x + width),
                 max_y.max(y + height as i32),
-                min_height.min(height),
             )
         },
     );
 
     let total_width = (max_x - min_x) as u32;
     let total_height = (max_y - min_y) as u32;
-    println!(
-        "Combined dimensions: {}x{} (from {}:{} to {}:{})",
-        total_width, total_height, min_x, min_y, max_x, max_y
-    );
 
     // Pre-allocate combined buffer
     let mut combined_buffer = vec![0u8; (total_width * total_height * 4) as usize];
@@ -69,11 +57,6 @@ fn take_screenshot() -> Result<(), eframe::Error> {
         let height = screen.display_info.height;
         let pos_x = (screen.display_info.x - min_x) as u32;
         let pos_y = (screen.display_info.y - min_y) as u32;
-
-        println!(
-            "Processing screen {}: {}x{} at position ({}, {})",
-            i, width, height, pos_x, pos_y
-        );
 
         // Load the image data
         let image = match image::load_from_memory(&buffer) {
@@ -127,7 +110,7 @@ fn run_selection_overlay(
             .with_transparent(true)
             .with_decorations(false)
             .with_active(true)
-            .with_window_level(egui::WindowLevel::AlwaysOnTop)
+            .with_window_level(AlwaysOnTop)
             .with_position(pos2(
                 width_offset as f32 * -1.0,
                 height_offset as f32 * -1.0,
